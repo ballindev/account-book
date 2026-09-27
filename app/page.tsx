@@ -118,7 +118,7 @@ export default function Home() {
       <main className="animate-fade-up w-full max-w-md">
         <header className="mb-12 sm:mb-14">
           <h1 className="text-[2rem] font-semibold tracking-tight text-foreground sm:text-[1.75rem] md:text-[2rem]">
-            나의 AI 가계부
+            나의 스마트 가계부
           </h1>
           <p className="mt-3 text-[17px] leading-relaxed text-muted sm:text-[15px]">
             날짜 · 금액 · 내용만 적으면 지출이 정리됩니다
