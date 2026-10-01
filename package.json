@@ -24,12 +24,5 @@
     "eslint-config-next": "16.3.6",
     "tailwindcss": "^4",
     "typescript": "^5"
-  },
-  "name": "my-project",
-  "version": "1.0.0",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "status": "lsof -i :3000 || echo '서버가 꺼져 있습니다.'"
   }
 }
