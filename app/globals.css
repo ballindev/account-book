@@ -1,13 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: #fafafa;
+  --background: #f7f7f8;
   --foreground: #1d1d1f;
-  --surface: #f2f2f2;
-  --muted: #86868b;
+  --surface: #ffffff;
+  --muted: #8e8e93;
   --accent: #1d1d1f;
   --accent-hover: #000000;
-  --danger: #86868b;
+  --bubble-user: #fee500;
+  --bubble-ai: #ffffff;
 }
 
 @theme inline {
@@ -17,7 +18,8 @@
   --color-muted: var(--muted);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
-  --color-danger: var(--danger);
+  --color-bubble-user: var(--bubble-user);
+  --color-bubble-ai: var(--bubble-ai);
   --font-sans: var(--font-noto-sans);
   --font-mono: var(--font-mono-nums);
 }
@@ -38,34 +40,16 @@ button {
   box-sizing: border-box;
 }
 
-/* iOS Safari: keep date field inside container and vertically centered */
-input[type="date"] {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  line-height: normal;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-input[type="date"]::-webkit-datetime-edit,
-input[type="date"]::-webkit-datetime-edit-fields-wrapper {
-  display: flex;
-  align-items: center;
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   padding: 0;
-  margin: 0;
-  height: 100%;
-}
-
-input[type="date"]::-webkit-date-and-time-value {
-  margin: auto 0;
-  padding: 0;
-  min-height: 1.25em;
-  line-height: 1.25em;
-  text-align: left;
-  min-width: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
 }
 
 @keyframes fade-up {
