@@ -16,7 +16,7 @@ function formatAmount(amount: number) {
 }
 
 const fieldClassName =
-  "h-14 w-full min-h-[56px] rounded-xl bg-background px-4 text-lg text-foreground outline-none transition placeholder:text-muted/70 focus:bg-white focus:ring-2 focus:ring-foreground/10 sm:h-12 sm:min-h-0 sm:text-[15px]";
+  "box-border h-14 w-full max-w-full min-h-[56px] min-w-0 rounded-xl bg-background px-4 text-lg text-foreground outline-none transition placeholder:text-muted/70 focus:bg-white focus:ring-2 focus:ring-foreground/10 sm:h-12 sm:min-h-0 sm:text-[15px]";
 
 export default function Home() {
   const [date, setDate] = useState(todayString);
@@ -129,8 +129,8 @@ export default function Home() {
           onSubmit={handleSubmit}
           className="w-full rounded-2xl bg-surface px-5 py-7 sm:px-7 sm:py-8"
         >
-          <div className="flex flex-col gap-8 sm:gap-6">
-            <label className="flex flex-col gap-2.5">
+          <div className="flex min-w-0 flex-col gap-8 sm:gap-6">
+            <label className="flex min-w-0 flex-col gap-2.5">
               <span className="text-[15px] font-medium text-muted sm:text-[13px]">
                 날짜
               </span>
@@ -139,11 +139,11 @@ export default function Home() {
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className={fieldClassName}
+                className={`${fieldClassName} text-base sm:text-[15px]`}
               />
             </label>
 
-            <label className="flex flex-col gap-2.5">
+            <label className="flex min-w-0 flex-col gap-2.5">
               <span className="text-[15px] font-medium text-muted sm:text-[13px]">
                 금액
               </span>
@@ -160,7 +160,7 @@ export default function Home() {
               />
             </label>
 
-            <label className="flex flex-col gap-2.5">
+            <label className="flex min-w-0 flex-col gap-2.5">
               <span className="text-[15px] font-medium text-muted sm:text-[13px]">
                 내용
               </span>

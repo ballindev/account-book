@@ -35,6 +35,22 @@ input,
 button {
   font: inherit;
   touch-action: manipulation;
+  box-sizing: border-box;
+}
+
+/* iOS Safari: native date control can overflow its container */
+input[type="date"] {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+input[type="date"]::-webkit-date-and-time-value {
+  text-align: left;
+  min-width: 0;
 }
 
 @keyframes fade-up {
