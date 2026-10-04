@@ -1,6 +1,10 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
-import { ExpenseRow, supabase } from "../../../lib/supabase";
+import {
+  ExpenseCategory,
+  normalizeCategory,
+} from "../../../lib/categories";
+import { ExpenseRow, fetchExpenses, insertExpense } from "../../../lib/supabase";
 
 type ChatRequestBody = {
   message?: string;
@@ -10,11 +14,17 @@ type ExpenseData = {
   date: string;
   amount: number;
   description: string;
+  category: ExpenseCategory;
 };
 
 type GeminiExpensePayload = {
   reply: string;
-  expense: ExpenseData | null;
+  expense: {
+    date: string;
+    amount: number;
+    description: string;
+    category?: string;
+  } | null;
   incomplete?: boolean;
 };
 
@@ -22,8 +32,8 @@ type Intent = "question" | "expense";
 
 const GEMINI_MODELS = [
   "gemini-3.8-flash",
-  "gemini-2.5-flash",
   "gemini-flash-latest",
+  "gemini-3.5-flash",
 ];
 
 function todayString() {
@@ -45,7 +55,7 @@ function formatKoreanDate(date: string) {
 }
 
 function buildConfirmationReply(expense: ExpenseData) {
-  return `${formatKoreanDate(expense.date)} ${expense.description} ${formatAmount(expense.amount)}원을 저장했어요!`;
+  return `${formatKoreanDate(expense.date)} ${expense.description} ${formatAmount(expense.amount)}원을 ${expense.category} 카테고리로 저장했어요!`;
 }
 
 function hasAmount(message: string) {
@@ -70,7 +80,6 @@ function classifyIntent(message: string): Intent {
   const question = hasQuestionCue(message);
   const amount = hasAmount(message);
 
-  // 통계/조회 의도가 분명하면 질문 우선 (금액 숫자가 섞여 있어도)
   if (
     question &&
     /(얼마|얼마나|뭐|어떻게|가장|제일|총|합계|통계|샀더라|알려줘|보여줘)/.test(
@@ -80,19 +89,14 @@ function classifyIntent(message: string): Intent {
     return "question";
   }
 
-  // 금액이 포함되면 지출 입력
   if (amount) return "expense";
-
-  // 그 외 의문 신호면 질문
   if (question) return "question";
-
-  // 애매하면 데이터 기반 답변 시도
   return "question";
 }
 
 function buildExpenseSystemPrompt(today: string) {
   return `당신은 친근한 AI 가계부 챗봇입니다.
-사용자가 한국어로 지출을 말하면 날짜·금액·내용을 추출합니다.
+사용자가 한국어로 지출을 말하면 날짜·금액·내용·카테고리를 추출합니다.
 오늘은 ${today} 입니다.
 
 날짜 규칙:
@@ -106,10 +110,23 @@ function buildExpenseSystemPrompt(today: string) {
 내용 규칙:
 - description은 짧고 명확하게 (예: 택시, 점심, 커피)
 
+카테고리 규칙:
+- category는 반드시 다음 중 하나만 사용: 식비, 교통, 쇼핑, 문화, 기타
+- 식비: 식사, 커피, 배달, 간식 등
+- 교통: 택시, 버스, 지하철, 주유 등
+- 쇼핑: 마트, 옷, 온라인 구매 등
+- 문화: 영화, 공연, 구독, 취미, 도서 등
+- 애매하면 기타
+
 반드시 아래 JSON만 출력하세요.
 {
   "reply": "사용자에게 보여줄 한국어 답변",
-  "expense": null 또는 { "date": "YYYY-MM-DD", "amount": 정수, "description": "내용" },
+  "expense": null 또는 {
+    "date": "YYYY-MM-DD",
+    "amount": 정수,
+    "description": "내용",
+    "category": "식비|교통|쇼핑|문화|기타"
+  },
   "incomplete": true 또는 false
 }
 
@@ -126,7 +143,7 @@ function buildStatsSystemPrompt(today: string) {
 
 답변 톤:
 - 자연스럽고 친근한 한국어
-- 핵심 숫자(합계, 건수, 항목)를 분명히
+- 핵심 숫자(합계, 건수, 항목, 카테고리)를 분명히
 - 필요하면 짧게 근거를 덧붙이기
 - JSON이나 코드 블록 없이 일반 문장으로만 답변
 
@@ -134,7 +151,9 @@ function buildStatsSystemPrompt(today: string) {
 - 이번 달 / 지난주 / 어제 / 오늘 등은 오늘(${today}) 기준으로 계산`;
 }
 
-function parseGeminiJson(text: string): GeminiExpensePayload {
+function parseGeminiJson(text: string): GeminiExpensePayload & {
+  expense: ExpenseData | null;
+} {
   const cleaned = text
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
@@ -157,6 +176,7 @@ function parseGeminiJson(text: string): GeminiExpensePayload {
   const amount = Number(parsed.expense.amount);
   const date = String(parsed.expense.date || "").trim();
   const description = String(parsed.expense.description || "").trim();
+  const category = normalizeCategory(parsed.expense.category);
   const dateValid = /^\d{4}-\d{2}-\d{2}$/.test(date);
 
   if (!dateValid || !description || !Number.isFinite(amount) || amount <= 0) {
@@ -176,6 +196,7 @@ function parseGeminiJson(text: string): GeminiExpensePayload {
       date,
       amount: Math.round(amount),
       description,
+      category,
     },
   };
 }
@@ -232,7 +253,11 @@ async function generateWithGemini(options: {
     } catch (error) {
       lastError = error;
       const raw = error instanceof Error ? error.message : "";
-      if (!/503|high demand|unavailable|404|no longer available|429|quota|rate.?limit|Too Many Requests/i.test(raw)) {
+      if (
+        !/503|high demand|unavailable|404|no longer available|429|quota|rate.?limit|Too Many Requests/i.test(
+          raw,
+        )
+      ) {
         throw error;
       }
     }
@@ -244,19 +269,18 @@ async function generateWithGemini(options: {
 }
 
 async function fetchAllExpenses() {
-  const { data, error } = await supabase
-    .from("expenses")
-    .select("id, created_at, date, amount, description")
-    .order("date", { ascending: false });
-
-  if (error) {
-    throw new Error(error.message);
+  const result = await fetchExpenses();
+  if (result.error) {
+    throw new Error(result.error);
   }
-
-  return (data ?? []) as ExpenseRow[];
+  return result.data as ExpenseRow[];
 }
 
-async function handleExpenseMessage(apiKey: string, message: string, today: string) {
+async function handleExpenseMessage(
+  apiKey: string,
+  message: string,
+  today: string,
+) {
   const rawText = await generateWithGemini({
     apiKey,
     prompt: buildExpenseSystemPrompt(today),
@@ -278,30 +302,39 @@ async function handleExpenseMessage(apiKey: string, message: string, today: stri
     });
   }
 
-  const { error: insertError } = await supabase.from("expenses").insert({
+  const insertResult = await insertExpense({
     date: parsed.expense.date,
     amount: parsed.expense.amount,
     description: parsed.expense.description,
+    category: parsed.expense.category,
   });
 
-  if (insertError) {
+  if (insertResult.error) {
     return NextResponse.json({
       reply: "지출은 이해했지만 저장에 실패했어요. 잠시 후 다시 시도해 주세요.",
       saved: false,
-      error: insertError.message,
+      error: insertResult.error,
       intent: "expense",
     });
   }
 
+  const reply = insertResult.categorySupported
+    ? buildConfirmationReply(parsed.expense)
+    : `${buildConfirmationReply(parsed.expense)} (참고: category 컬럼이 없어 기타로 보일 수 있어요. Supabase에 category 컬럼을 추가해 주세요.)`;
+
   return NextResponse.json({
-    reply: buildConfirmationReply(parsed.expense),
+    reply,
     saved: true,
     expense: parsed.expense,
     intent: "expense",
   });
 }
 
-async function handleQuestionMessage(apiKey: string, message: string, today: string) {
+async function handleQuestionMessage(
+  apiKey: string,
+  message: string,
+  today: string,
+) {
   const expenses = await fetchAllExpenses();
 
   if (expenses.length === 0) {
@@ -316,7 +349,7 @@ async function handleQuestionMessage(apiKey: string, message: string, today: str
   const expenseLines = expenses
     .map(
       (item) =>
-        `- date: ${item.date}, amount: ${item.amount}, description: ${item.description}`,
+        `- date: ${item.date}, amount: ${item.amount}, description: ${item.description}, category: ${item.category}`,
     )
     .join("\n");
 
