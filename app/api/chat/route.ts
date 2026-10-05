@@ -1,10 +1,14 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
+import { buildCategoryPromptList } from "../../../lib/categories";
 import {
-  ExpenseCategory,
-  normalizeCategory,
-} from "../../../lib/categories";
-import { ExpenseRow, fetchExpenses, insertExpense } from "../../../lib/supabase";
+  CategoryRow,
+  ExpenseRow,
+  fetchCategories,
+  fetchExpenses,
+  insertExpense,
+  resolveCategory,
+} from "../../../lib/supabase";
 
 type ChatRequestBody = {
   message?: string;
@@ -14,7 +18,8 @@ type ExpenseData = {
   date: string;
   amount: number;
   description: string;
-  category: ExpenseCategory;
+  category: string;
+  category_id: number;
 };
 
 type GeminiExpensePayload = {
@@ -94,7 +99,9 @@ function classifyIntent(message: string): Intent {
   return "question";
 }
 
-function buildExpenseSystemPrompt(today: string) {
+function buildExpenseSystemPrompt(today: string, categories: CategoryRow[]) {
+  const categoryList = buildCategoryPromptList(categories);
+
   return `당신은 친근한 AI 가계부 챗봇입니다.
 사용자가 한국어로 지출을 말하면 날짜·금액·내용·카테고리를 추출합니다.
 오늘은 ${today} 입니다.
@@ -111,12 +118,8 @@ function buildExpenseSystemPrompt(today: string) {
 - description은 짧고 명확하게 (예: 택시, 점심, 커피)
 
 카테고리 규칙:
-- category는 반드시 다음 중 하나만 사용: 식비, 교통, 쇼핑, 문화, 기타
-- 식비: 식사, 커피, 배달, 간식 등
-- 교통: 택시, 버스, 지하철, 주유 등
-- 쇼핑: 마트, 옷, 온라인 구매 등
-- 문화: 영화, 공연, 구독, 취미, 도서 등
-- 애매하면 기타
+- category는 반드시 다음 목록 중 하나만 사용: ${categoryList}
+- 애매하면 기타(또는 목록의 기본 카테고리)
 
 반드시 아래 JSON만 출력하세요.
 {
@@ -125,7 +128,7 @@ function buildExpenseSystemPrompt(today: string) {
     "date": "YYYY-MM-DD",
     "amount": 정수,
     "description": "내용",
-    "category": "식비|교통|쇼핑|문화|기타"
+    "category": "카테고리명"
   },
   "incomplete": true 또는 false
 }
@@ -151,9 +154,10 @@ function buildStatsSystemPrompt(today: string) {
 - 이번 달 / 지난주 / 어제 / 오늘 등은 오늘(${today}) 기준으로 계산`;
 }
 
-function parseGeminiJson(text: string): GeminiExpensePayload & {
-  expense: ExpenseData | null;
-} {
+function parseGeminiJson(
+  text: string,
+  categories: CategoryRow[],
+): GeminiExpensePayload & { expense: ExpenseData | null } {
   const cleaned = text
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
@@ -176,10 +180,16 @@ function parseGeminiJson(text: string): GeminiExpensePayload & {
   const amount = Number(parsed.expense.amount);
   const date = String(parsed.expense.date || "").trim();
   const description = String(parsed.expense.description || "").trim();
-  const category = normalizeCategory(parsed.expense.category);
+  const resolved = resolveCategory(categories, parsed.expense.category);
   const dateValid = /^\d{4}-\d{2}-\d{2}$/.test(date);
 
-  if (!dateValid || !description || !Number.isFinite(amount) || amount <= 0) {
+  if (
+    !dateValid ||
+    !description ||
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    !resolved
+  ) {
     return {
       reply:
         parsed.reply ||
@@ -196,7 +206,8 @@ function parseGeminiJson(text: string): GeminiExpensePayload & {
       date,
       amount: Math.round(amount),
       description,
-      category,
+      category: resolved.name,
+      category_id: resolved.id,
     },
   };
 }
@@ -268,28 +279,31 @@ async function generateWithGemini(options: {
     : new Error("Gemini API 호출에 실패했습니다.");
 }
 
-async function fetchAllExpenses() {
-  const result = await fetchExpenses();
-  if (result.error) {
-    throw new Error(result.error);
-  }
-  return result.data as ExpenseRow[];
-}
-
 async function handleExpenseMessage(
   apiKey: string,
   message: string,
   today: string,
 ) {
+  const categoriesResult = await fetchCategories({ activeOnly: true });
+  if (categoriesResult.error || categoriesResult.data.length === 0) {
+    return NextResponse.json({
+      reply:
+        "카테고리 정보를 불러오지 못했어요. 설정 탭에서 카테고리를 확인해 주세요.",
+      saved: false,
+      error: categoriesResult.error,
+      intent: "expense",
+    });
+  }
+
   const rawText = await generateWithGemini({
     apiKey,
-    prompt: buildExpenseSystemPrompt(today),
+    prompt: buildExpenseSystemPrompt(today, categoriesResult.data),
     userText: `사용자 메시지: ${message}`,
     json: true,
     temperature: 0.2,
   });
 
-  const parsed = parseGeminiJson(rawText);
+  const parsed = parseGeminiJson(rawText, categoriesResult.data);
 
   if (!parsed.expense) {
     return NextResponse.json({
@@ -306,6 +320,7 @@ async function handleExpenseMessage(
     date: parsed.expense.date,
     amount: parsed.expense.amount,
     description: parsed.expense.description,
+    category_id: parsed.expense.category_id,
     category: parsed.expense.category,
   });
 
@@ -318,12 +333,8 @@ async function handleExpenseMessage(
     });
   }
 
-  const reply = insertResult.categorySupported
-    ? buildConfirmationReply(parsed.expense)
-    : `${buildConfirmationReply(parsed.expense)} (참고: category 컬럼이 없어 기타로 보일 수 있어요. Supabase에 category 컬럼을 추가해 주세요.)`;
-
   return NextResponse.json({
-    reply,
+    reply: buildConfirmationReply(parsed.expense),
     saved: true,
     expense: parsed.expense,
     intent: "expense",
@@ -335,7 +346,12 @@ async function handleQuestionMessage(
   message: string,
   today: string,
 ) {
-  const expenses = await fetchAllExpenses();
+  const expensesResult = await fetchExpenses();
+  if (expensesResult.error) {
+    throw new Error(expensesResult.error);
+  }
+
+  const expenses = expensesResult.data as ExpenseRow[];
 
   if (expenses.length === 0) {
     return NextResponse.json({
