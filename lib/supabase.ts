@@ -23,9 +23,12 @@ export type ExpenseRow = {
 
 function isMissingCategoryColumn(error: { message?: string; code?: string } | null) {
   if (!error) return false;
+  const message = error.message ?? "";
   return (
     error.code === "42703" ||
-    /column .*category.* does not exist/i.test(error.message ?? "")
+    error.code === "PGRST204" ||
+    /column .*category.* does not exist/i.test(message) ||
+    /Could not find the 'category' column/i.test(message)
   );
 }
 
